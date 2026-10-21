@@ -129,7 +129,14 @@ document.getElementById('registerPanel').addEventListener('submit',async e=>{
  }catch(err){authMessage(err.message||'Kunne ikke sende søknaden.',true)}
  finally{button.disabled=false}
 });
-if(new URLSearchParams(window.location.search).get('mode')==='reset'||window.location.hash.includes('type=recovery'))showAuthPanel('resetPanel');
+const resetParams = new URLSearchParams(window.location.search);
+const recoveryMode = resetParams.get('mode') === 'reset' || window.location.hash.includes('type=recovery');
+
+if (recoveryMode) {
+  showAuthPanel('resetPanel');
+  document.body.classList.remove('authenticated');
+  document.getElementById('authScreen').hidden = false;
+}
 
 function asIsoDate(value){return /^\d{4}-\d{2}-\d{2}$/.test(String(value||''))?value:null}
 function durationWeeks(value){const n=parseInt(String(value||'').match(/\d+/)?.[0]||'',10);return Number.isFinite(n)&&n>=1&&n<=104?n:null}
