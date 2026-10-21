@@ -35,8 +35,20 @@
     </form>
     <form id="resetPanel" hidden>
       <h2>Velg nytt passord</h2>
-      <div class="field"><label for="newPassword">Nytt passord (minst 8 tegn)</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password" required></div>
-      <div class="field"><label for="confirmPassword">Gjenta nytt passord</label><input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required></div>
+     <div class="field">
+  <label for="newPassword">Nytt passord (minst 8 tegn)</label>
+  <div style="display:flex;gap:8px">
+    <input id="newPassword" type="password" minlength="8" autocomplete="new-password" required style="flex:1;min-width:0">
+    <button type="button" onclick="const p=document.getElementById('newPassword');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Vis':'Skjul'">Vis</button>
+  </div>
+</div>
+<div class="field">
+  <label for="confirmPassword">Gjenta nytt passord</label>
+  <div style="display:flex;gap:8px">
+    <input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required style="flex:1;min-width:0">
+    <button type="button" onclick="const p=document.getElementById('confirmPassword');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Vis':'Skjul'">Vis</button>
+  </div>
+</div>
       <button class="primary" type="submit" style="width:100%">Lagre nytt passord</button>
     </form>
     <form id="registerPanel" hidden>
