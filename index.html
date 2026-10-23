@@ -35,20 +35,8 @@
     </form>
     <form id="resetPanel" hidden>
       <h2>Velg nytt passord</h2>
-     <div class="field">
-  <label for="newPassword">Nytt passord (minst 8 tegn)</label>
-  <div style="display:flex;gap:8px">
-    <input id="newPassword" type="password" minlength="8" autocomplete="new-password" required style="flex:1;min-width:0">
-    <button type="button" onclick="const p=document.getElementById('newPassword');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Vis':'Skjul'">Vis</button>
-  </div>
-</div>
-<div class="field">
-  <label for="confirmPassword">Gjenta nytt passord</label>
-  <div style="display:flex;gap:8px">
-    <input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required style="flex:1;min-width:0">
-    <button type="button" onclick="const p=document.getElementById('confirmPassword');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Vis':'Skjul'">Vis</button>
-  </div>
-</div>
+      <div class="field"><label for="newPassword">Nytt passord (minst 8 tegn)</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password" required></div>
+      <div class="field"><label for="confirmPassword">Gjenta nytt passord</label><input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required></div>
       <button class="primary" type="submit" style="width:100%">Lagre nytt passord</button>
     </form>
     <form id="registerPanel" hidden>
@@ -78,6 +66,10 @@ let db=load(),page='overview',filter='Alle statuser',selectedParticipant='p1',ma
 const SUPABASE_URL='https://ilibfpkztxrgysgmyjyy.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY='sb_publishable_plByu9PPVCoSmXLviN7I5g_EpGwf-zq';
 const supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+const initialUrl=new URL(window.location.href);
+const initialHashParams=new URLSearchParams(initialUrl.hash.startsWith('#')?initialUrl.hash.slice(1):initialUrl.hash);
+const resetFlowRequested=initialUrl.searchParams.get('mode')==='reset'||initialHashParams.get('type')==='recovery';
+let recoverySessionReady=false;
 let currentUser=null,organizationId=null,organizationRole=null,lastSyncedLocal=null,syncBusy=false,syncRequested=false,isPlatformAdmin=false;
 const TEST_KEY="listerPraksisLocalTestV1";
 let testMode=false,productionSnapshot=null,productionSelectedParticipant=null,productionSessionLabel=null;
@@ -105,6 +97,21 @@ async function save(){
  return true;
 }
 function authMessage(message,isError=false){const el=document.getElementById('authMessage');if(el){el.textContent=message;el.style.color=isError?'#8b2828':'var(--muted)'}}
+function authErrorMessage(err){
+ const raw=String(err?.message||'');
+ const m=raw.toLowerCase();
+ if(m.includes('invalid login credentials'))return 'E-postadressen eller passordet stemmer ikke.';
+ if(m.includes('email not confirmed'))return 'Bekreft e-postadressen din før du logger inn.';
+ if(m.includes('email rate limit exceeded')||m.includes('rate limit'))return 'For mange e-poster er sendt på kort tid. Vent før du prøver igjen.';
+ if(m.includes('auth session missing')||m.includes('session missing'))return 'Sikkerhetsøkten mangler. Åpne den nyeste lenken fra e-posten på nytt i samme nettleser.';
+ if(m.includes('password should be')||m.includes('password is too short'))return 'Passordet oppfyller ikke kravene. Bruk minst 8 tegn.';
+ if(m.includes('user already registered'))return 'Det finnes allerede en konto med denne e-postadressen. Prøv å logge inn eller tilbakestille passordet.';
+ if(m.includes('not authorized')||m.includes('ikke tilgang'))return 'Du har ikke tilgang til denne handlingen.';
+ if(m.includes('application not found')||m.includes('søknaden ble ikke funnet'))return 'Søknaden ble ikke funnet. Oppdater siden og prøv igjen.';
+ if(m.includes('already been reviewed')||m.includes('allerede behandlet'))return 'Søknaden er allerede behandlet. Oppdater listen.';
+ if(m.includes('network')||m.includes('fetch'))return 'Tilkoblingen mislyktes. Kontroller internettforbindelsen og prøv igjen.';
+ return raw||'Noe gikk galt. Prøv igjen senere.';
+}
 function showAuthPanel(name){
  for(const id of ['loginPanel','forgotPanel','resetPanel','registerPanel'])document.getElementById(id).hidden=id!==name;
  authMessage(name==='loginPanel'?'Sikker innlogging via Supabase.':'');
@@ -117,15 +124,29 @@ document.getElementById('forgotPanel').addEventListener('submit',async e=>{
  e.preventDefault();const email=document.getElementById('forgotEmail').value.trim();
  authMessage('Sender lenke …');
  try{const {error}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:window.location.origin+window.location.pathname+'?mode=reset'});if(error)throw error;authMessage('Hvis e-postadressen er registrert, blir det sendt en lenke for å tilbakestille passordet. Sjekk også søppelpost.')}
- catch(err){authMessage(err.message||'Kunne ikke sende lenken.',true)}
+ catch(err){authMessage(authErrorMessage(err),true)}
 });
 document.getElementById('resetPanel').addEventListener('submit',async e=>{
  e.preventDefault();const password=document.getElementById('newPassword').value,confirm=document.getElementById('confirmPassword').value;
  if(password.length<8){authMessage('Passordet må ha minst 8 tegn.',true);return}
  if(password!==confirm){authMessage('Passordene er ikke like.',true);return}
  authMessage('Lagrer nytt passord …');
- try{const {error}=await supabase.auth.updateUser({password});if(error)throw error;await supabase.auth.signOut();history.replaceState({},document.title,window.location.pathname);document.getElementById('loginPassword').value='';showAuthPanel('loginPanel');authMessage('Passordet er endret. Du kan nå logge inn med det nye passordet.')}
- catch(err){authMessage(err.message||'Kunne ikke endre passord. Åpne lenken fra e-posten på nytt.',true)}
+ const button=e.submitter||document.querySelector('#resetPanel button[type="submit"]');
+ if(button)button.disabled=true;
+ try{
+  const {data:{session},error:sessionError}=await supabase.auth.getSession();
+  if(sessionError)throw sessionError;
+  if(!session||!recoverySessionReady)throw new Error('Auth session missing');
+  const {error}=await supabase.auth.updateUser({password});
+  if(error)throw error;
+  await supabase.auth.signOut();
+  history.replaceState({},document.title,window.location.pathname);
+  document.getElementById('loginPassword').value='';
+  recoverySessionReady=false;
+  showAuthPanel('loginPanel');
+  authMessage('Passordet er endret. Du kan nå logge inn med det nye passordet.')
+ }catch(err){authMessage(authErrorMessage(err),true)}
+ finally{if(button)button.disabled=false}
 });
 document.getElementById('registerPanel').addEventListener('submit',async e=>{
  e.preventDefault();const applicationType=document.getElementById('registerType').value,company=document.getElementById('registerCompany').value.trim(),number=document.getElementById('registerNumber').value.trim(),contact=document.getElementById('registerContact').value.trim(),email=document.getElementById('registerEmail').value.trim(),password=document.getElementById('registerPassword').value,password2=document.getElementById('registerPassword2').value,button=document.getElementById('registerButton');
@@ -138,16 +159,14 @@ document.getElementById('registerPanel').addEventListener('submit',async e=>{
   if(data.user&&data.session){await supabase.auth.signOut()}
   showAuthPanel('loginPanel');
   authMessage('Søknaden er sendt. Bekreft e-postadressen din. Plattformadministrator må godkjenne organisasjonen før du får tilgang.');
- }catch(err){authMessage(err.message||'Kunne ikke sende søknaden.',true)}
+ }catch(err){authMessage(authErrorMessage(err),true)}
  finally{button.disabled=false}
 });
-const resetParams = new URLSearchParams(window.location.search);
-const recoveryMode = resetParams.get('mode') === 'reset' || window.location.hash.includes('type=recovery');
-
-if (recoveryMode) {
-  showAuthPanel('resetPanel');
-  document.body.classList.remove('authenticated');
-  document.getElementById('authScreen').hidden = false;
+if(resetFlowRequested){
+ showAuthPanel('loginPanel');
+ document.body.classList.remove('authenticated');
+ document.getElementById('authScreen').hidden=false;
+ authMessage('Bekrefter tilbakestillingslenken …');
 }
 
 function asIsoDate(value){return /^\d{4}-\d{2}-\d{2}$/.test(String(value||''))?value:null}
@@ -229,7 +248,7 @@ function hideKnownDemoRows(remote){
 async function loadOrganizationData(){
  const {data:members,error:memberError}=await supabase.from('organization_memberships').select('organization_id,role').eq('user_id',currentUser.id);
  if(memberError)throw memberError;
- if(!members||!members.length)throw new Error('Hesabınızın kuruluş üyeliği bulunamadı. Supabase organization_memberships kaydını kontrol edin.');
+ if(!members||!members.length)throw new Error('Kontoen din mangler organisasjonstilknytning. Kontroller medlemskapet i Supabase.');
  // Ignore stale memberships that point to a deleted/missing organization when the organizations table is readable.
  let activeMemberships=members;
  try{
@@ -274,11 +293,46 @@ async function loadOrganizationData(){
  document.getElementById('sessionUser').textContent=(profile?.display_name||currentUser.email||'Innlogget')+' · '+organizationRole+(isPlatformAdmin?' · Plattformadmin':'');
  document.body.classList.add('authenticated');render();
 }
-async function bootstrap(){try{const {data:{session}}=await supabase.auth.getSession();if(session){currentUser=session.user;await loadOrganizationData()}else{document.body.classList.remove('authenticated');document.getElementById('authScreen').hidden=false}}catch(e){try{await supabase.auth.signOut()}catch(signOutError){}currentUser=null;organizationId=null;organizationRole=null;document.body.classList.remove('authenticated');document.getElementById('authScreen').hidden=false;authMessage('Kunne ikke åpne organisasjonen: '+(e.message||'ukjent feil'),true)}}
-document.getElementById('loginForm').addEventListener('submit',async e=>{e.preventDefault();const button=document.getElementById('loginButton');button.disabled=true;authMessage('Logger inn …');try{const email=document.getElementById('loginEmail').value.trim(),password=document.getElementById('loginPassword').value;const {data,error}=await supabase.auth.signInWithPassword({email,password});if(error)throw error;currentUser=data.user;await loadOrganizationData();authMessage('Innlogging vellykket.')}catch(err){try{await supabase.auth.signOut()}catch(signOutError){}currentUser=null;organizationId=null;organizationRole=null;document.body.classList.remove('authenticated');document.getElementById('authScreen').hidden=false;authMessage(err.message||'Innlogging mislyktes.',true)}finally{button.disabled=false}});
-document.getElementById('magicLinkButton').addEventListener('click',async()=>{const email=document.getElementById('loginEmail').value.trim();if(!email){authMessage('Önce e-posta adresini yaz.',true);return}authMessage('Innloggingslenke sendes …');const {error}=await supabase.auth.signInWithOtp({email,options:{emailRedirectTo:window.location.href}});authMessage(error?error.message:'Hvis adressen finnes og lenker er konfigurert, sendes en innloggingslenke. Lenker krever vanligvis at appens adresse er lagt til i Supabase Auth URL Configuration.',!!error)});
+async function bootstrap(){
+ try{
+  const {data:{session},error:sessionError}=await supabase.auth.getSession();
+  if(sessionError)throw sessionError;
+  if(resetFlowRequested){
+   document.body.classList.remove('authenticated');
+   document.getElementById('authScreen').hidden=false;
+   if(session&&(recoverySessionReady||initialHashParams.get('type')==='recovery'||initialUrl.searchParams.has('code'))){
+    recoverySessionReady=true;
+    showAuthPanel('resetPanel');
+    authMessage('Lenken er bekreftet. Velg et nytt passord.');
+   }else{
+    showAuthPanel('loginPanel');
+    authMessage('Tilbakestillingslenken er ugyldig, utløpt eller ikke bekreftet. Bruk den nyeste e-posten og åpne lenken i samme nettleser.',true);
+   }
+   return;
+  }
+  if(session){currentUser=session.user;await loadOrganizationData()}
+  else{document.body.classList.remove('authenticated');document.getElementById('authScreen').hidden=false}
+ }catch(e){
+  try{await supabase.auth.signOut()}catch(signOutError){}
+  currentUser=null;organizationId=null;organizationRole=null;
+  document.body.classList.remove('authenticated');
+  document.getElementById('authScreen').hidden=false;
+  authMessage('Kunne ikke åpne organisasjonen: '+authErrorMessage(e),true)
+ }
+}
+document.getElementById('loginForm').addEventListener('submit',async e=>{e.preventDefault();const button=document.getElementById('loginButton');button.disabled=true;authMessage('Logger inn …');try{const email=document.getElementById('loginEmail').value.trim(),password=document.getElementById('loginPassword').value;const {data,error}=await supabase.auth.signInWithPassword({email,password});if(error)throw error;currentUser=data.user;await loadOrganizationData();authMessage('Innlogging vellykket.')}catch(err){try{await supabase.auth.signOut()}catch(signOutError){}currentUser=null;organizationId=null;organizationRole=null;document.body.classList.remove('authenticated');document.getElementById('authScreen').hidden=false;authMessage(authErrorMessage(err),true)}finally{button.disabled=false}});
+document.getElementById('magicLinkButton').addEventListener('click',async()=>{const email=document.getElementById('loginEmail').value.trim();if(!email){authMessage('Skriv inn e-postadressen din først.',true);return}authMessage('Innloggingslenke sendes …');const {error}=await supabase.auth.signInWithOtp({email,options:{emailRedirectTo:window.location.href}});authMessage(error?authErrorMessage(error):'Hvis adressen finnes, sendes en innloggingslenke. Kontroller også søppelpost.',!!error)});
 document.getElementById('signOutBtn').addEventListener('click',async()=>{if(testMode)exitTestMode();await supabase.auth.signOut();currentUser=null;organizationId=null;organizationRole=null;lastSyncedLocal=null;isPlatformAdmin=false;const adminNav=document.getElementById('platformAdminNav');if(adminNav)adminNav.hidden=true;document.body.classList.remove('authenticated');document.getElementById('authScreen').hidden=false;document.getElementById('loginPassword').value='';authMessage('Du er logget ut.')});
-supabase.auth.onAuthStateChange((_event,session)=>{if(!session){document.body.classList.remove('authenticated')}});
+supabase.auth.onAuthStateChange((event,session)=>{
+ if(event==='PASSWORD_RECOVERY'&&session){
+  recoverySessionReady=true;
+  document.body.classList.remove('authenticated');
+  document.getElementById('authScreen').hidden=false;
+  showAuthPanel('resetPanel');
+  authMessage('Lenken er bekreftet. Velg et nytt passord.');
+ }
+ if(!session){document.body.classList.remove('authenticated')}
+});
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function formatDateNo(value){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(value||'')))return '';const [y,m,d]=value.split('-');return d+'.'+m+'.'+y}
 function parseDateNo(value){const v=String(value||'').trim();if(!v)return '';let m=v.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})$/);if(!m)return null;const d=Number(m[1]),mo=Number(m[2]),y=Number(m[3]);const dt=new Date(Date.UTC(y,mo-1,d));if(dt.getUTCFullYear()!==y||dt.getUTCMonth()!==mo-1||dt.getUTCDate()!==d)return null;return String(y).padStart(4,'0')+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0')}
